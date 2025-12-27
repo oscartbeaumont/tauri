@@ -229,6 +229,14 @@ pub fn wrapper(attributes: TokenStream, item: TokenStream) -> TokenStream {
       .unwrap_or_else(syn::Error::into_compile_error),
   };
 
+  let args = function
+    .sig
+    .inputs
+    .iter()
+    .map(|arg| parse_arg2(arg, &attrs))
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap(); // TODO: Error handling
+
   let Invoke {
     message,
     resolver,
@@ -299,6 +307,11 @@ pub fn wrapper(attributes: TokenStream, item: TokenStream) -> TokenStream {
           }
         }()
       };
+      // This is allows for external crates to infer arguments names.
+      // This can't be done through traits due to Rust not exposing argument names through `impl Fn()` or `fn()` class of traits.
+      (@args) => {
+        [#(#args,)*]
+      }
     }
 
     // allow the macro to be resolved with the same path as the command function
@@ -477,6 +490,52 @@ fn parse_arg(
       acl: &#acl,
     }
   )))
+}
+
+fn parse_arg2(arg: &FnArg, attributes: &WrapperAttributes) -> syn::Result<TokenStream2> {
+  // we have no use for self arguments
+  let mut arg = match arg {
+    FnArg::Typed(arg) => arg.pat.as_ref().clone(),
+    FnArg::Receiver(arg) => {
+      return Err(syn::Error::new(
+        arg.span(),
+        "unable to use self as a command function parameter",
+      ))
+    }
+  };
+
+  // we only support patterns that allow us to extract some sort of keyed identifier
+  let mut key = match &mut arg {
+    Pat::Ident(arg) => arg.ident.unraw().to_string(),
+    Pat::Wild(_) => "".into(), // we always convert to camelCase, so "_" will end up empty anyways
+    Pat::Struct(s) => super::path_to_command(&mut s.path).ident.to_string(),
+    Pat::TupleStruct(s) => super::path_to_command(&mut s.path).ident.to_string(),
+    err => {
+      return Err(syn::Error::new(
+        err.span(),
+        "only named, wildcard, struct, and tuple struct arguments allowed",
+      ))
+    }
+  };
+
+  // also catch self arguments that use FnArg::Typed syntax
+  if key == "self" {
+    return Err(syn::Error::new(
+      key.span(),
+      "unable to use self as a command function parameter",
+    ));
+  }
+
+  match attributes.argument_case {
+    ArgumentCase::Camel => {
+      key = key.to_lower_camel_case();
+    }
+    ArgumentCase::Snake => {
+      key = key.to_snake_case();
+    }
+  }
+
+  Ok(quote!(#key))
 }
 
 fn is_rustc_at_least(major: u32, minor: u32) -> bool {
