@@ -1101,6 +1101,7 @@ pub(crate) use run_main_thread;
 #[cfg_attr(docsrs, doc(cfg(feature = "test")))]
 pub mod test;
 
+// TODO: Remove this in Tauri v2
 #[cfg(feature = "specta")]
 const _: () = {
   use specta::{datatype::DataType, function::FunctionArg, TypeMap};
