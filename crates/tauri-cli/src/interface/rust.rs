@@ -7,6 +7,7 @@ use std::{
   ffi::OsStr,
   fs::FileType,
   io::{BufRead, Write},
+  iter::once,
   path::{Path, PathBuf},
   process::Command,
   str::FromStr,
@@ -15,7 +16,6 @@ use std::{
 };
 
 use dunce::canonicalize;
-use glob::glob;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::RecursiveMode;
 use notify_debouncer_full::new_debouncer;
@@ -449,24 +449,14 @@ fn dev_options(
   }
 }
 
-// Copied from https://github.com/rust-lang/cargo/blob/69255bb10de7f74511b5cef900a9d102247b6029/src/cargo/core/workspace.rs#L665
-fn expand_member_path(path: &Path) -> crate::Result<Vec<PathBuf>> {
-  let path = path.to_str().context("path is not UTF-8 compatible")?;
-  let res = glob(path).with_context(|| format!("failed to expand glob pattern for {path}"))?;
-  let res = res
-    .map(|p| p.with_context(|| format!("failed to expand glob pattern for {path}")))
-    .collect::<Result<Vec<_>, _>>()?;
-  Ok(res)
-}
-
 fn get_watch_folders(
   additional_watch_folders: &[PathBuf],
   tauri_dir: &Path,
 ) -> crate::Result<Vec<PathBuf>> {
-  let workspace_path = get_workspace_dir(tauri_dir)?;
-
   // We always want to watch the main tauri folder.
   let mut watch_folders = vec![tauri_dir.to_path_buf()];
+
+  watch_folders.extend(get_in_workspace_dependency_paths(tauri_dir)?);
 
   // Add the additional watch folders, resolving the path from the tauri path if it is relative
   watch_folders.extend(additional_watch_folders.iter().filter_map(|dir| {
@@ -485,30 +475,6 @@ fn get_watch_folders(
     }
     canonicalized
   }));
-
-  // We also try to watch workspace members, no matter if the tauri cargo project is the workspace root or a workspace member
-  let cargo_settings = CargoSettings::load(&workspace_path)?;
-  if let Some(members) = cargo_settings.workspace.and_then(|w| w.members) {
-    for p in members {
-      let p = workspace_path.join(p);
-      match expand_member_path(&p) {
-        // Sometimes expand_member_path returns an empty vec, for example if the path contains `[]` as in `C:/[abc]/project/`.
-        // Cargo won't complain unless theres a workspace.members config with glob patterns so we should support it too.
-        Ok(expanded_paths) => {
-          if expanded_paths.is_empty() {
-            watch_folders.push(p);
-          } else {
-            watch_folders.extend(expanded_paths);
-          }
-        }
-        Err(err) => {
-          // If this fails cargo itself should fail too. But we still try to keep going with the unexpanded path.
-          log::error!("Error watching {}: {}", p.display(), err);
-          watch_folders.push(p);
-        }
-      };
-    }
-  }
 
   Ok(watch_folders)
 }
@@ -556,8 +522,13 @@ impl Rust {
 
     let watch_folders = get_watch_folders(additional_watch_folders, dirs.tauri)?;
 
-    let common_ancestor = common_path::common_path_all(watch_folders.iter().map(Path::new))
-      .expect("watch_folders should not be empty");
+    let common_ancestor = common_path::common_path_all(
+      watch_folders
+        .iter()
+        .map(Path::new)
+        .chain(once(self.app_settings.workspace_dir.as_path())),
+    )
+    .expect("watch_folders should not be empty");
     let ignore_matcher = build_ignore_matcher(&common_ancestor);
 
     let mut watcher = new_debouncer(Duration::from_secs(1), None, move |r| {
@@ -692,7 +663,7 @@ pub struct TomlWorkspaceField {
 #[derive(Clone, Debug, Deserialize)]
 struct WorkspaceSettings {
   /// the workspace members.
-  members: Option<Vec<String>>,
+  // members: Option<Vec<String>>,
   package: Option<WorkspacePackageSettings>,
 }
 
@@ -779,6 +750,7 @@ pub struct RustAppSettings {
   cargo_config: CargoConfig,
   target_triple: String,
   target_platform: TargetPlatform,
+  workspace_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -1096,7 +1068,8 @@ impl RustAppSettings {
       }
     };
 
-    let ws_package_settings = CargoSettings::load(&get_workspace_dir(tauri_dir)?)
+    let workspace_dir = get_workspace_dir(tauri_dir)?;
+    let ws_package_settings = CargoSettings::load(&workspace_dir)
       .context("failed to load Cargo settings from workspace root")?
       .workspace
       .and_then(|v| v.package);
@@ -1191,6 +1164,7 @@ impl RustAppSettings {
       cargo_config,
       target_triple,
       target_platform,
+      workspace_dir,
     })
   }
 
@@ -1210,6 +1184,23 @@ impl RustAppSettings {
 pub(crate) struct CargoMetadata {
   pub(crate) target_directory: PathBuf,
   pub(crate) workspace_root: PathBuf,
+  workspace_members: Vec<String>,
+  packages: Vec<Package>,
+}
+
+#[derive(Deserialize)]
+struct Package {
+  name: String,
+  id: String,
+  manifest_path: PathBuf,
+  dependencies: Vec<Dependency>,
+}
+
+#[derive(Deserialize)]
+struct Dependency {
+  name: String,
+  /// Local package
+  path: Option<PathBuf>,
 }
 
 pub(crate) fn get_cargo_metadata(tauri_dir: &Path) -> crate::Result<CargoMetadata> {
@@ -1230,6 +1221,56 @@ pub(crate) fn get_cargo_metadata(tauri_dir: &Path) -> crate::Result<CargoMetadat
   }
 
   serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata")
+}
+
+/// Get the tauri project crate's dependencies that are inside the workspace
+fn get_in_workspace_dependency_paths(tauri_dir: &Path) -> crate::Result<Vec<PathBuf>> {
+  let metadata = get_cargo_metadata(tauri_dir)?;
+  let tauri_project_manifest_path = tauri_dir.join("Cargo.toml");
+  let tauri_project_package = metadata
+    .packages
+    .iter()
+    .find(|package| package.manifest_path == tauri_project_manifest_path)
+    .context("tauri project package doesn't exist in cargo metadata output `packages`")?;
+
+  let workspace_packages = metadata
+    .workspace_members
+    .iter()
+    .map(|member_package_id| {
+      metadata
+        .packages
+        .iter()
+        .find(|package| package.id == *member_package_id)
+        .context("workspace member doesn't exist in cargo metadata output `packages`")
+    })
+    .collect::<crate::Result<Vec<_>>>()?;
+
+  let mut found_dependency_paths = Vec::new();
+  find_dependencies(
+    tauri_project_package,
+    &workspace_packages,
+    &mut found_dependency_paths,
+  );
+  Ok(found_dependency_paths)
+}
+
+fn find_dependencies(
+  package: &Package,
+  workspace_packages: &Vec<&Package>,
+  found_dependency_paths: &mut Vec<PathBuf>,
+) {
+  for dependency in &package.dependencies {
+    if let Some(path) = &dependency.path {
+      if let Some(package) = workspace_packages.iter().find(|workspace_package| {
+        workspace_package.name == dependency.name
+          && path.join("Cargo.toml") == workspace_package.manifest_path
+          && !found_dependency_paths.contains(path)
+      }) {
+        found_dependency_paths.push(path.to_owned());
+        find_dependencies(package, workspace_packages, found_dependency_paths);
+      }
+    }
+  }
 }
 
 /// Get the cargo target directory based on the provided arguments.
