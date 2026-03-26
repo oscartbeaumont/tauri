@@ -208,15 +208,6 @@ export function mockIPC(
     }
   }
 
-  function parseJson(callbackId: number, data: string): unknown {
-    void callbackId
-    return JSON.parse(data)
-  }
-
-  function runCallbackWithJson(id: number, data: string) {
-    runCallback(id, parseJson(id, data))
-  }
-
   function unregisterListener(event: EventName, id: number) {
     unregisterCallback(id)
   }
@@ -225,8 +216,6 @@ export function mockIPC(
   window.__TAURI_INTERNALS__.transformCallback = registerCallback
   window.__TAURI_INTERNALS__.unregisterCallback = unregisterCallback
   window.__TAURI_INTERNALS__.runCallback = runCallback
-  window.__TAURI_INTERNALS__.runCallbackWithJson = runCallbackWithJson
-  window.__TAURI_INTERNALS__.parseJson = parseJson
   window.__TAURI_INTERNALS__.callbacks = callbacks
   window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener =
     unregisterListener
@@ -352,10 +341,6 @@ export function clearMocks(): void {
   delete window.__TAURI_INTERNALS__.unregisterCallback
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
   delete window.__TAURI_INTERNALS__.runCallback
-  // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
-  delete window.__TAURI_INTERNALS__.runCallbackWithJson
-  // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
-  delete window.__TAURI_INTERNALS__.parseJson
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
   delete window.__TAURI_INTERNALS__.callbacks
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case

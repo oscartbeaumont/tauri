@@ -19,8 +19,6 @@ declare global {
       transformCallback: typeof transformCallback
       unregisterCallback: (id: number) => void
       runCallback: (id: number, data: unknown) => void
-      runCallbackWithJson: (id: number, data: string) => void
-      parseJson: (callbackId: number, data: string) => unknown
       callbacks: Map<number, (data: unknown) => void>
       convertFileSrc: typeof convertFileSrc
       ipc: (message: {

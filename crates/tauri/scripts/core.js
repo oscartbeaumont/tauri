@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 ;(function () {
+  const RAW_JSON_KEY = '__TAURI_JSON_STRING__'
+
   function uid() {
     return window.crypto.getRandomValues(new Uint32Array(1))[0]
   }
@@ -41,32 +43,35 @@
   function runCallback(id, data) {
     const callback = callbacks.get(id)
     if (callback) {
-      callback(data)
+      try {
+        const metadata = invokeMetadata.get(id)
+
+        if (
+          metadata
+          && typeof metadata.reviver === 'function'
+          && data
+          && typeof data === 'object'
+          && RAW_JSON_KEY in data
+        ) {
+          callback(JSON.parse(data[RAW_JSON_KEY], metadata.reviver))
+        } else {
+          callback(data)
+        }
+      } catch (error) {
+        const metadata = invokeMetadata.get(id)
+        const target = metadata?.error ?? id
+        const targetCallback = callbacks.get(target)
+
+        if (targetCallback) {
+          targetCallback(error instanceof Error ? error.message : `${error}`)
+        } else {
+          throw error
+        }
+      }
     } else {
       console.warn(
         `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
       )
-    }
-  }
-
-  function parseJson(callbackId, data) {
-    const metadata = invokeMetadata.get(callbackId)
-
-    if (metadata && typeof metadata.reviver === 'function') {
-      return JSON.parse(data, metadata.reviver)
-    }
-
-    return JSON.parse(data)
-  }
-
-  function runCallbackWithJson(id, data) {
-    try {
-      runCallback(id, parseJson(id, data))
-    } catch (error) {
-      const metadata = invokeMetadata.get(id)
-      const target = metadata?.error ?? id
-
-      runCallback(target, error instanceof Error ? error.message : `${error}`)
     }
   }
 
@@ -81,14 +86,6 @@
 
   Object.defineProperty(window.__TAURI_INTERNALS__, 'runCallback', {
     value: runCallback
-  })
-
-  Object.defineProperty(window.__TAURI_INTERNALS__, 'runCallbackWithJson', {
-    value: runCallbackWithJson
-  })
-
-  Object.defineProperty(window.__TAURI_INTERNALS__, 'parseJson', {
-    value: parseJson
   })
 
   // This is just for the debugging purposes

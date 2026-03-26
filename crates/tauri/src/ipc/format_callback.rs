@@ -122,7 +122,7 @@ pub fn format_raw_js_with_json_parse(
   raw_json_string_literal: impl AsRef<str>,
 ) -> String {
   format!(
-    "window.__TAURI_INTERNALS__.runCallbackWithJson({callback_id}, {})",
+    "window.__TAURI_INTERNALS__.runCallback({callback_id}, {{ __TAURI_JSON_STRING__: {} }})",
     raw_json_string_literal.as_ref()
   )
 }
@@ -383,7 +383,7 @@ mod test {
 
     assert_eq!(
       format_raw_with_json_parse(callback, json).unwrap(),
-      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(7, "{\"value\":9007199254740993}")"#
+      r#"window.__TAURI_INTERNALS__.runCallback(7, { __TAURI_JSON_STRING__: "{\"value\":9007199254740993}" })"#
     );
   }
 
@@ -394,12 +394,12 @@ mod test {
 
     assert_eq!(
       format_result_raw_with_json_parse(Ok("123".to_string()), success, error).unwrap(),
-      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(7, "123")"#
+      r#"window.__TAURI_INTERNALS__.runCallback(7, { __TAURI_JSON_STRING__: "123" })"#
     );
 
     assert_eq!(
       format_result_raw_with_json_parse(Err("\"oops\"".to_string()), success, error).unwrap(),
-      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(9, "\"oops\"")"#
+      r#"window.__TAURI_INTERNALS__.runCallback(9, { __TAURI_JSON_STRING__: "\"oops\"" })"#
     );
   }
 }

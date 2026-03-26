@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 ;(function () {
+  const RAW_JSON_KEY = '__TAURI_JSON_STRING__'
+
   /**
    * A runtime generated key to ensure an IPC call comes from an initialized frame.
    *
@@ -62,10 +64,7 @@
             case 'application/json':
               return response
                 .text()
-                .then((r) => [
-                  callbackId,
-                  window.__TAURI_INTERNALS__.parseJson(callbackId, r)
-                ])
+                .then((r) => [callbackId, { [RAW_JSON_KEY]: r }])
             case 'text/plain':
               return response.text().then((r) => [callbackId, r])
             default:
