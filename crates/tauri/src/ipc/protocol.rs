@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, fmt, sync::Arc};
 
 use crate::{
   ipc::InvokeResponseBody,
@@ -17,6 +17,8 @@ use http::{
   },
   HeaderValue, Method, Request, StatusCode,
 };
+use serde::de::{self, Deserialize, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde_json::{Map, Number, Value};
 use url::Url;
 
 use super::{CallbackFn, InvokeResponse};
@@ -527,8 +529,9 @@ fn parse_invoke_request<R: Runtime>(
   } else if content_type == mime::APPLICATION_JSON {
     // if the platform does not support request body, we ignore it
     if has_payload {
-      serde_json::from_slice::<serde_json::Value>(&body)
+      serde_json::from_slice::<BigIntValue>(&body)
         .map_err(|e| e.to_string())?
+        .0
         .into()
     } else {
       serde_json::Value::Object(Default::default()).into()
@@ -551,6 +554,146 @@ fn parse_invoke_request<R: Runtime>(
   };
 
   Ok(payload)
+}
+
+// TODO: Rename this
+struct BigIntValue(Value);
+
+impl<'de> Deserialize<'de> for BigIntValue {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    ValueSeed.deserialize(deserializer).map(BigIntValue)
+  }
+}
+
+struct ValueSeed;
+
+impl<'de> DeserializeSeed<'de> for ValueSeed {
+  type Value = Value;
+
+  fn deserialize<D>(self, deserializer: D) -> Result<Value, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    deserializer.deserialize_any(ValueVisitor)
+  }
+}
+
+struct ValueVisitor;
+
+impl<'de> Visitor<'de> for ValueVisitor {
+  type Value = Value;
+
+  fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    f.write_str("any valid JSON value")
+  }
+
+  fn visit_bool<E>(self, v: bool) -> Result<Value, E> {
+    Ok(Value::Bool(v))
+  }
+
+  fn visit_i64<E>(self, v: i64) -> Result<Value, E> {
+    Ok(Value::Number(Number::from(v)))
+  }
+
+  fn visit_u64<E>(self, v: u64) -> Result<Value, E> {
+    Ok(Value::Number(Number::from(v)))
+  }
+
+  fn visit_f64<E>(self, v: f64) -> Result<Value, E>
+  where
+    E: de::Error,
+  {
+    Number::from_f64(v)
+      .map(Value::Number)
+      .ok_or_else(|| E::custom("invalid JSON number"))
+  }
+
+  fn visit_str<E>(self, v: &str) -> Result<Value, E>
+  where
+    E: de::Error,
+  {
+    Ok(Value::String(v.to_owned()))
+  }
+
+  fn visit_string<E>(self, v: String) -> Result<Value, E> {
+    Ok(Value::String(v))
+  }
+
+  fn visit_none<E>(self) -> Result<Value, E> {
+    Ok(Value::Null)
+  }
+
+  fn visit_unit<E>(self) -> Result<Value, E> {
+    Ok(Value::Null)
+  }
+
+  fn visit_seq<A>(self, mut seq: A) -> Result<Value, A::Error>
+  where
+    A: SeqAccess<'de>,
+  {
+    let mut values = Vec::new();
+    while let Some(elem) = seq.next_element_seed(ValueSeed)? {
+      values.push(elem);
+    }
+    Ok(Value::Array(values))
+  }
+
+  fn visit_map<A>(self, mut map: A) -> Result<Value, A::Error>
+  where
+    A: MapAccess<'de>,
+  {
+    let Some(first_key) = map.next_key::<String>()? else {
+      return Ok(Value::Object(Map::new()));
+    };
+
+    if first_key == "$bigint" {
+      let bigint_str = map.next_value::<String>()?;
+
+      if let Some(second_key) = map.next_key::<String>()? {
+        let mut obj = Map::new();
+        obj.insert("$bigint".to_owned(), Value::String(bigint_str));
+        let second_value = map.next_value_seed(ValueSeed)?;
+        obj.insert(second_key, second_value);
+
+        while let Some((k, v)) = map.next_entry::<String, BigIntValue>()? {
+          obj.insert(k, v.0);
+        }
+
+        // TODO
+        // while let Some((k, v)) = map
+        //   .next_entry_seed(
+        //     serde::de::value::StringDeserializer::<A::Error>::new(String::new()),
+        //     ValueSeed,
+        //   )
+        //   .ok()
+        //   .flatten()
+        // {
+        //   obj.insert(k, v);
+        // }
+
+        return Ok(Value::Object(obj));
+      }
+
+      let number = bigint_str
+        .parse::<Number>()
+        .map_err(|_| de::Error::custom("invalid $bigint numeric string"))?;
+
+      return Ok(Value::Number(number));
+    }
+
+    let mut obj = Map::new();
+    let first_value = map.next_value_seed(ValueSeed)?;
+    obj.insert(first_key, first_value);
+
+    while let Some((k, v)) = map.next_entry::<String, BigIntValue>()? {
+      obj.insert(k, v.0);
+    }
+
+    Ok(Value::Object(obj))
+  }
 }
 
 #[cfg(test)]

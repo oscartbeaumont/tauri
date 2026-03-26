@@ -27,6 +27,9 @@
         return Array.from(val)
       } else if (val instanceof ArrayBuffer) {
         return Array.from(new Uint8Array(val))
+      } else if (typeof val === "bigint") {
+        console.log("GOT BIGINT", val);
+        return { "$bigint": val.toString() }; // TODO: This could conflict with end-user structs so fix that.
       } else if (
         typeof val === 'object'
         && val !== null
