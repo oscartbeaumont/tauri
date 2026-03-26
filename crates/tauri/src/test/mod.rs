@@ -44,6 +44,7 @@
 //!             body: tauri::ipc::InvokeBody::default(),
 //!             headers: Default::default(),
 //!             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+//!             response: tauri::webview::InvokeResponseMode::Json,
 //!         },
 //!     ).map(|b| b.deserialize::<String>().unwrap());
 //! }
@@ -220,6 +221,7 @@ pub fn mock_app() -> App<MockRuntime> {
 ///             body: tauri::ipc::InvokeBody::default(),
 ///             headers: Default::default(),
 ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+///             response: tauri::webview::InvokeResponseMode::Json,
 ///         },
 ///       Ok("pong")
 ///     );
@@ -279,6 +281,7 @@ pub fn assert_ipc_response<
 ///             body: tauri::ipc::InvokeBody::default(),
 ///             headers: Default::default(),
 ///             invoke_key: tauri::test::INVOKE_KEY.to_string(),
+///             response: tauri::webview::InvokeResponseMode::Json,
 ///         },
 ///     );
 ///     assert!(res.is_ok());

@@ -230,7 +230,12 @@ type InvokeArgs = Record<string, unknown> | number[] | ArrayBuffer | Uint8Array
  * @since 2.0.0
  */
 interface InvokeOptions {
-  headers: HeadersInit
+  headers?: HeadersInit
+  /**
+   * Whether Tauri should decode JSON responses before resolving the promise.
+   * Use `raw` to receive the original response body for custom parsing.
+   */
+  response?: 'json' | 'raw'
 }
 
 /**
@@ -248,12 +253,26 @@ interface InvokeOptions {
  *
  * @since 1.0.0
  */
+function invoke<T>(
+  cmd: string,
+  args?: InvokeArgs,
+  options?: InvokeOptions & { response?: 'json' }
+): Promise<T>
+function invoke(
+  cmd: string,
+  args: InvokeArgs | undefined,
+  options: InvokeOptions & { response: 'raw' }
+): Promise<string | ArrayBuffer>
 async function invoke<T>(
   cmd: string,
   args: InvokeArgs = {},
   options?: InvokeOptions
-): Promise<T> {
-  return window.__TAURI_INTERNALS__.invoke(cmd, args, options)
+): Promise<T | string | ArrayBuffer> {
+  return window.__TAURI_INTERNALS__.invoke(
+    cmd,
+    args,
+    options as InvokeOptions & { response?: 'json' }
+  ) as Promise<T | string | ArrayBuffer>
 }
 
 /**

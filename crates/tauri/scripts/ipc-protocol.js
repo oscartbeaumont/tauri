@@ -14,6 +14,7 @@
   const processIpcMessage = __RAW_process_ipc_message_fn__
   const osName = __TEMPLATE_os_name__
   const fetchChannelDataCommand = __TEMPLATE_fetch_channel_data_command__
+  const responseModeHeader = 'Tauri-Response-Mode'
   let customProtocolIpcFailed = false
 
   // on Android we never use it because Android does not have support to reading the request body
@@ -33,6 +34,9 @@
       headers.set('Tauri-Callback', callback)
       headers.set('Tauri-Error', error)
       headers.set('Tauri-Invoke-Key', __TAURI_INVOKE_KEY__)
+      if (options?.response === 'raw') {
+        headers.set(responseModeHeader, options.response)
+      }
 
       fetch(window.__TAURI_INTERNALS__.convertFileSrc(cmd, 'ipc'), {
         method: 'POST',
@@ -42,10 +46,13 @@
         .then((response) => {
           const callbackId =
             response.headers.get('Tauri-Response') === 'ok' ? callback : error
+          const responseMode = options?.response ?? 'json'
           // we need to split here because on Android the content-type gets duplicated
           switch ((response.headers.get('content-type') || '').split(',')[0]) {
             case 'application/json':
-              return response.json().then((r) => [callbackId, r])
+              return response[responseMode === 'raw' ? 'text' : 'json']().then(
+                (r) => [callbackId, r]
+              )
             case 'text/plain':
               return response.text().then((r) => [callbackId, r])
             default:

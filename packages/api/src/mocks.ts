@@ -152,13 +152,30 @@ export function mockIPC(
   async function invoke<T>(
     cmd: string,
     args?: InvokeArgs,
-    _options?: InvokeOptions
+    invokeOptions?: InvokeOptions
   ): Promise<T> {
     if (options?.shouldMockEvents && isEventPluginInvoke(cmd)) {
       return handleEventPlugin(cmd, args) as T
     }
 
-    return cb(cmd, args) as T
+    const response = await cb(cmd, args)
+
+    if (invokeOptions?.response === 'raw') {
+      if (response instanceof ArrayBuffer) {
+        return response as T
+      }
+
+      if (ArrayBuffer.isView(response)) {
+        return response.buffer.slice(
+          response.byteOffset,
+          response.byteOffset + response.byteLength
+        ) as T
+      }
+
+      return JSON.stringify(response) as T
+    }
+
+    return response as T
   }
 
   const callbacks = new Map<number, (data: unknown) => void>()

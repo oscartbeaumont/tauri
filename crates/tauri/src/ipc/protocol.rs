@@ -7,7 +7,7 @@ use std::{borrow::Cow, sync::Arc};
 use crate::{
   ipc::InvokeResponseBody,
   manager::AppManager,
-  webview::{InvokeRequest, UriSchemeProtocolHandler},
+  webview::{InvokeRequest, InvokeResponseMode, UriSchemeProtocolHandler},
   Runtime,
 };
 use http::{
@@ -24,6 +24,7 @@ use super::{CallbackFn, InvokeResponse};
 const TAURI_CALLBACK_HEADER_NAME: &str = "Tauri-Callback";
 const TAURI_ERROR_HEADER_NAME: &str = "Tauri-Error";
 const TAURI_INVOKE_KEY_HEADER_NAME: &str = "Tauri-Invoke-Key";
+const TAURI_RESPONSE_MODE_HEADER_NAME: &str = "Tauri-Response-Mode";
 
 const TAURI_RESPONSE_HEADER_NAME: &str = "Tauri-Response";
 const TAURI_RESPONSE_HEADER_ERROR: &str = "error";
@@ -228,6 +229,8 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
       headers: HeaderMap,
       #[serde(default)]
       custom_protocol_ipc_blocked: bool,
+      #[serde(default)]
+      response: InvokeResponseMode,
     }
 
     #[derive(Deserialize)]
@@ -294,6 +297,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
     match message {
       Ok(message) => {
         let options = message.options.unwrap_or_default();
+        let response_mode = options.response;
 
         let request = InvokeRequest {
           cmd: message.cmd,
@@ -303,6 +307,7 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
           body: message.payload.into(),
           headers: options.headers.0,
           invoke_key: message.invoke_key,
+          response: response_mode,
         };
 
         #[cfg(feature = "tracing")]
@@ -369,12 +374,22 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
 
             match response {
               InvokeResponse::Ok(InvokeResponseBody::Json(v)) => {
-                if !(cfg!(target_os = "macos") || cfg!(target_os = "ios"))
+                if response_mode == InvokeResponseMode::Raw {
+                  responder_eval(
+                    &webview,
+                    crate::ipc::format_callback::format_result(
+                      Result::<_, String>::Ok(v),
+                      callback,
+                      error,
+                    ),
+                    error,
+                  )
+                } else if !(cfg!(target_os = "macos") || cfg!(target_os = "ios"))
                   && (v.starts_with('{') || v.starts_with('['))
                   && can_use_channel_for_response
                 {
-                  let _ =
-                    Channel::from_callback_fn(webview, callback).send(InvokeResponseBody::Json(v));
+                  let _ = Channel::from_callback_fn(webview, callback, response_mode)
+                    .send(InvokeResponseBody::Json(v));
                 } else {
                   responder_eval(
                     &webview,
@@ -402,17 +417,24 @@ fn handle_ipc_message<R: Runtime>(request: Request<String>, manager: &AppManager
                     error,
                   );
                 } else {
-                  let _ =
-                    Channel::from_callback_fn(webview, callback).send(InvokeResponseBody::Raw(v));
+                  let _ = Channel::from_callback_fn(webview, callback, response_mode)
+                    .send(InvokeResponseBody::Raw(v));
                 }
               }
               InvokeResponse::Err(e) => responder_eval(
                 &webview,
-                crate::ipc::format_callback::format_result(
-                  Result::<(), _>::Err(&e.0),
-                  callback,
-                  error,
-                ),
+                match response_mode {
+                  InvokeResponseMode::Json => crate::ipc::format_callback::format_result(
+                    Result::<(), _>::Err(&e.0),
+                    callback,
+                    error,
+                  ),
+                  InvokeResponseMode::Raw => crate::ipc::format_callback::format_result(
+                    Result::<String, _>::Err(serde_json::to_string(&e.0).unwrap()),
+                    callback,
+                    error,
+                  ),
+                },
                 error,
               ),
             }
@@ -540,6 +562,16 @@ fn parse_invoke_request<R: Runtime>(
   #[cfg(feature = "tracing")]
   drop(span);
 
+  let response = parts
+    .headers
+    .get(TAURI_RESPONSE_MODE_HEADER_NAME)
+    .and_then(|v| v.to_str().ok())
+    .and_then(|v| match v {
+      "raw" => Some(InvokeResponseMode::Raw),
+      _ => None,
+    })
+    .unwrap_or_default();
+
   let payload = InvokeRequest {
     cmd,
     callback,
@@ -548,6 +580,7 @@ fn parse_invoke_request<R: Runtime>(
     body,
     headers: parts.headers,
     invoke_key,
+    response,
   };
 
   Ok(payload)
@@ -558,7 +591,10 @@ mod tests {
   use std::str::FromStr;
 
   use super::*;
-  use crate::{ipc::InvokeBody, manager::AppManager, plugin::PluginStore, StateManager, Wry};
+  use crate::{
+    ipc::InvokeBody, manager::AppManager, plugin::PluginStore, webview::InvokeResponseMode,
+    StateManager, Wry,
+  };
   use http::header::*;
   use serde_json::json;
   use tauri_macros::generate_context;
@@ -623,6 +659,7 @@ mod tests {
     assert_eq!(invoke_request.url, url.parse().unwrap());
     assert_eq!(invoke_request.headers, headers);
     assert_eq!(invoke_request.body, InvokeBody::Raw(body));
+    assert_eq!(invoke_request.response, InvokeResponseMode::Json);
 
     let body = json!({
       "key": 1,
@@ -642,6 +679,22 @@ mod tests {
 
     assert_eq!(invoke_request.headers, headers);
     assert_eq!(invoke_request.body, InvokeBody::Json(body));
+    assert_eq!(invoke_request.response, InvokeResponseMode::Json);
+
+    headers.insert(
+      HeaderName::from_str(TAURI_RESPONSE_MODE_HEADER_NAME).unwrap(),
+      HeaderValue::from_static("raw"),
+    );
+
+    let mut request = Request::builder().uri(format!("ipc://localhost/{cmd}"));
+    *request.headers_mut().unwrap() = headers.clone();
+
+    let request = request
+      .body(serde_json::to_vec(&json!({ "key": 1 })).unwrap())
+      .unwrap();
+    let invoke_request = super::parse_invoke_request(&manager, request).unwrap();
+
+    assert_eq!(invoke_request.response, InvokeResponseMode::Raw);
   }
 
   #[test]
@@ -739,6 +792,7 @@ mod tests {
     assert_eq!(invoke_request.url, url.parse().unwrap());
     assert_eq!(invoke_request.headers, headers);
     assert_eq!(invoke_request.body, InvokeBody::Raw(body_raw));
+    assert_eq!(invoke_request.response, InvokeResponseMode::Json);
 
     let mut request = Request::builder().uri(format!("ipc://localhost/{cmd}"));
     *request.headers_mut().unwrap() = headers.clone();
@@ -748,5 +802,6 @@ mod tests {
 
     assert_eq!(invoke_request.headers, headers);
     assert_eq!(invoke_request.body, InvokeBody::Json(body_json));
+    assert_eq!(invoke_request.response, InvokeResponseMode::Json);
   }
 }

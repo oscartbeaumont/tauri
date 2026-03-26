@@ -16,7 +16,7 @@ pub use webview_window::{WebviewWindow, WebviewWindowBuilder};
 /// This re-exported crate is still on an alpha release and might receive updates in minor Tauri releases.
 pub use cookie;
 use http::HeaderMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri_macros::default_runtime;
 pub use tauri_runtime::webview::{NewWindowFeatures, PageLoadEvent, ScrollBarStyle};
 // Remove this re-export in v3
@@ -143,6 +143,19 @@ pub struct InvokeRequest {
   pub headers: HeaderMap,
   /// The invoke key. Must match what was passed to the app manager.
   pub invoke_key: String,
+  /// The response mode requested by the caller.
+  pub response: InvokeResponseMode,
+}
+
+/// The requested IPC response mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InvokeResponseMode {
+  /// Decode JSON responses before resolving the invoke promise.
+  #[default]
+  Json,
+  /// Return textual responses as their raw body.
+  Raw,
 }
 
 /// The platform webview handle. Accessed with [`Webview#method.with_webview`];

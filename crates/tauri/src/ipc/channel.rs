@@ -17,6 +17,7 @@ use crate::{
   command,
   ipc::{CommandArg, CommandItem},
   plugin::{Builder as PluginBuilder, TauriPlugin},
+  webview::InvokeResponseMode,
   Manager, Runtime, State, Webview,
 };
 
@@ -241,7 +242,11 @@ impl<TSend> Channel<TSend> {
   }
 
   // This is used from the IPC handler
-  pub(crate) fn from_callback_fn<R: Runtime>(webview: Webview<R>, callback: CallbackFn) -> Self {
+  pub(crate) fn from_callback_fn<R: Runtime>(
+    webview: Webview<R>,
+    callback: CallbackFn,
+    response: InvokeResponseMode,
+  ) -> Self {
     let callback_id = callback.0;
     Channel::new_with_id(
       callback_id,
@@ -251,7 +256,13 @@ impl<TSend> Channel<TSend> {
           InvokeResponseBody::Json(json_string)
             if json_string.len() < MAX_JSON_DIRECT_EXECUTE_THRESHOLD =>
           {
-            webview.eval(format_raw_js(callback_id, json_string))?;
+            webview.eval(format_raw_js(
+              callback_id,
+              match response {
+                InvokeResponseMode::Json => json_string,
+                InvokeResponseMode::Raw => serde_json::to_string(&json_string)?,
+              },
+            ))?;
           }
           InvokeResponseBody::Raw(bytes) if bytes.len() < MAX_RAW_DIRECT_EXECUTE_THRESHOLD => {
             let bytes_as_json_array = serde_json::to_string(&bytes)?;
@@ -272,7 +283,11 @@ impl<TSend> Channel<TSend> {
               .insert(data_id, body);
 
             webview.eval(format!(
-              "window.__TAURI_INTERNALS__.invoke('{FETCH_CHANNEL_DATA_COMMAND}', null, {{ headers: {{ '{CHANNEL_ID_HEADER_NAME}': '{data_id}' }} }}).then((response) => window.__TAURI_INTERNALS__.runCallback({callback_id}, response)).catch(console.error)",
+              "window.__TAURI_INTERNALS__.invoke('{FETCH_CHANNEL_DATA_COMMAND}', null, {{ headers: {{ '{CHANNEL_ID_HEADER_NAME}': '{data_id}' }}, response: '{response_mode}' }}).then((response) => window.__TAURI_INTERNALS__.runCallback({callback_id}, response)).catch(console.error)",
+              response_mode = match response {
+                InvokeResponseMode::Json => "json",
+                InvokeResponseMode::Raw => "raw",
+              }
             ))?;
           }
         }
