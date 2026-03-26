@@ -27,6 +27,8 @@
         return Array.from(val)
       } else if (val instanceof ArrayBuffer) {
         return Array.from(new Uint8Array(val))
+      } else if (typeof val === "bigint") {
+        return JSON.rawJSON(val.toString());
       } else if (
         typeof val === 'object'
         && val !== null
