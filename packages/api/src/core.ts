@@ -226,11 +226,23 @@ async function requestPermissions<T>(plugin: string): Promise<T> {
  */
 type InvokeArgs = Record<string, unknown> | number[] | ArrayBuffer | Uint8Array
 
+interface InvokeResponseReviverContext {
+  source: string
+}
+
+type InvokeResponseReviver = (
+  this: unknown,
+  key: string,
+  value: unknown,
+  context?: InvokeResponseReviverContext
+) => unknown
+
 /**
  * @since 2.0.0
  */
 interface InvokeOptions {
-  headers: HeadersInit
+  headers?: HeadersInit
+  reviver?: InvokeResponseReviver
 }
 
 /**
@@ -339,7 +351,12 @@ function isTauri(): boolean {
   return !!((globalThis as any) || window).isTauri
 }
 
-export type { InvokeArgs, InvokeOptions }
+export type {
+  InvokeArgs,
+  InvokeOptions,
+  InvokeResponseReviver,
+  InvokeResponseReviverContext
+}
 
 export {
   transformCallback,

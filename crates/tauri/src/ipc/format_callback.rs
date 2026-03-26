@@ -97,12 +97,34 @@ pub fn format_raw(function_name: CallbackFn, json_string: String) -> crate::Resu
   })
 }
 
+/// Formats a function name and a raw JSON string argument to be parsed on the JavaScript side.
+pub fn format_raw_with_json_parse(
+  function_name: CallbackFn,
+  json_string: String,
+) -> crate::Result<String> {
+  Ok(format_raw_js_with_json_parse(
+    function_name.0,
+    serde_json::to_string(&json_string)?,
+  ))
+}
+
 /// Formats a function name and a JavaScript string argument to be evaluated as callback.
 pub fn format_raw_js(callback_id: u32, js: impl AsRef<str>) -> String {
   fn format_inner(callback_id: u32, js: &str) -> String {
     format!("window.__TAURI_INTERNALS__.runCallback({callback_id}, {js})")
   }
   format_inner(callback_id, js.as_ref())
+}
+
+/// Formats a callback invocation that parses raw JSON on the JavaScript side.
+pub fn format_raw_js_with_json_parse(
+  callback_id: u32,
+  raw_json_string_literal: impl AsRef<str>,
+) -> String {
+  format!(
+    "window.__TAURI_INTERNALS__.runCallbackWithJson({callback_id}, {})",
+    raw_json_string_literal.as_ref()
+  )
 }
 
 /// Formats a serializable Result type to its Promise response.
@@ -137,6 +159,18 @@ pub fn format_result_raw(
   match raw_result {
     Ok(res) => format_raw(success_callback, res),
     Err(err) => format_raw(error_callback, err),
+  }
+}
+
+/// Formats a Result type of raw JSON strings to its Promise response, parsing JSON on the JavaScript side.
+pub fn format_result_raw_with_json_parse(
+  raw_result: Result<String, String>,
+  success_callback: CallbackFn,
+  error_callback: CallbackFn,
+) -> crate::Result<String> {
+  match raw_result {
+    Ok(res) => format_raw_with_json_parse(success_callback, res),
+    Err(err) => format_raw_with_json_parse(error_callback, err),
   }
 }
 
@@ -340,5 +374,32 @@ mod test {
       r#"window.__TAURI_INTERNALS__.runCallback({}, {})"#,
       function.0, value
     ))
+  }
+
+  #[test]
+  fn test_format_raw_with_json_parse() {
+    let callback = CallbackFn(7);
+    let json = r#"{"value":9007199254740993}"#.to_string();
+
+    assert_eq!(
+      format_raw_with_json_parse(callback, json).unwrap(),
+      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(7, "{\"value\":9007199254740993}")"#
+    );
+  }
+
+  #[test]
+  fn test_format_result_raw_with_json_parse() {
+    let success = CallbackFn(7);
+    let error = CallbackFn(9);
+
+    assert_eq!(
+      format_result_raw_with_json_parse(Ok("123".to_string()), success, error).unwrap(),
+      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(7, "123")"#
+    );
+
+    assert_eq!(
+      format_result_raw_with_json_parse(Err("\"oops\"".to_string()), success, error).unwrap(),
+      r#"window.__TAURI_INTERNALS__.runCallbackWithJson(9, "\"oops\"")"#
+    );
   }
 }

@@ -39,13 +39,33 @@
         body: data,
         headers
       })
+        .catch((e) => {
+          console.warn(
+            'IPC custom protocol failed, Tauri will now use the postMessage interface instead',
+            e
+          )
+          // failed to use the custom protocol IPC (either the webview blocked a custom protocol or it was a CSP error)
+          // so we need to fallback to the postMessage interface
+          customProtocolIpcFailed = true
+          sendIpcMessage(message)
+          return null
+        })
         .then((response) => {
+          if (response === null) {
+            return null
+          }
+
           const callbackId =
             response.headers.get('Tauri-Response') === 'ok' ? callback : error
           // we need to split here because on Android the content-type gets duplicated
           switch ((response.headers.get('content-type') || '').split(',')[0]) {
             case 'application/json':
-              return response.json().then((r) => [callbackId, r])
+              return response
+                .text()
+                .then((r) => [
+                  callbackId,
+                  window.__TAURI_INTERNALS__.parseJson(callbackId, r)
+                ])
             case 'text/plain':
               return response.text().then((r) => [callbackId, r])
             default:
@@ -53,18 +73,19 @@
           }
         })
         .then(
-          ([callbackId, data]) => {
+          (result) => {
+            if (result === null) {
+              return
+            }
+
+            const [callbackId, data] = result
             window.__TAURI_INTERNALS__.runCallback(callbackId, data)
           },
           (e) => {
-            console.warn(
-              'IPC custom protocol failed, Tauri will now use the postMessage interface instead',
-              e
+            window.__TAURI_INTERNALS__.runCallback(
+              error,
+              e instanceof Error ? e.message : `${e}`
             )
-            // failed to use the custom protocol IPC (either the webview blocked a custom protocol or it was a CSP error)
-            // so we need to fallback to the postMessage interface
-            customProtocolIpcFailed = true
-            sendIpcMessage(message)
           }
         )
     } else {

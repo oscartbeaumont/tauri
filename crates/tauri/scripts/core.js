@@ -20,6 +20,7 @@
   })
 
   const callbacks = new Map()
+  const invokeMetadata = new Map()
 
   function registerCallback(callback, once) {
     const identifier = uid()
@@ -34,6 +35,7 @@
 
   function unregisterCallback(id) {
     callbacks.delete(id)
+    invokeMetadata.delete(id)
   }
 
   function runCallback(id, data) {
@@ -44,6 +46,27 @@
       console.warn(
         `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`
       )
+    }
+  }
+
+  function parseJson(callbackId, data) {
+    const metadata = invokeMetadata.get(callbackId)
+
+    if (metadata && typeof metadata.reviver === 'function') {
+      return JSON.parse(data, metadata.reviver)
+    }
+
+    return JSON.parse(data)
+  }
+
+  function runCallbackWithJson(id, data) {
+    try {
+      runCallback(id, parseJson(id, data))
+    } catch (error) {
+      const metadata = invokeMetadata.get(id)
+      const target = metadata?.error ?? id
+
+      runCallback(target, error instanceof Error ? error.message : `${error}`)
     }
   }
 
@@ -58,6 +81,14 @@
 
   Object.defineProperty(window.__TAURI_INTERNALS__, 'runCallback', {
     value: runCallback
+  })
+
+  Object.defineProperty(window.__TAURI_INTERNALS__, 'runCallbackWithJson', {
+    value: runCallbackWithJson
+  })
+
+  Object.defineProperty(window.__TAURI_INTERNALS__, 'parseJson', {
+    value: parseJson
   })
 
   // This is just for the debugging purposes
@@ -81,6 +112,14 @@
   Object.defineProperty(window.__TAURI_INTERNALS__, 'invoke', {
     value: function (cmd, payload = {}, options) {
       return new Promise(function (resolve, reject) {
+        const ipcOptions = options ? { ...options } : {}
+        const reviver = ipcOptions?.reviver
+        const shouldUseReviver = typeof reviver === 'function'
+
+        if (ipcOptions && 'reviver' in ipcOptions) {
+          delete ipcOptions.reviver
+        }
+
         const callback = registerCallback((r) => {
           resolve(r)
           unregisterCallback(error)
@@ -90,13 +129,20 @@
           unregisterCallback(callback)
         }, true)
 
+        if (shouldUseReviver) {
+          invokeMetadata.set(callback, { reviver, error })
+          invokeMetadata.set(error, { reviver, error })
+
+          ipcOptions.responseNeedsJsonParse = true
+        }
+
         const action = () => {
           window.__TAURI_INTERNALS__.ipc({
             cmd,
             callback,
             error,
             payload,
-            options
+            options: Object.keys(ipcOptions).length > 0 ? ipcOptions : undefined
           })
         }
         if ('ipc' in window.__TAURI_INTERNALS__) {

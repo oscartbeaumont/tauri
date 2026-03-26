@@ -103,7 +103,7 @@ export interface MockIPCOptions {
  */
 export function mockIPC(
   cb: (cmd: string, payload?: InvokeArgs) => unknown,
-  options?: MockIPCOptions
+  mockOptions?: MockIPCOptions
 ): void {
   mockInternals()
 
@@ -152,13 +152,28 @@ export function mockIPC(
   async function invoke<T>(
     cmd: string,
     args?: InvokeArgs,
-    _options?: InvokeOptions
+    invokeOptions?: InvokeOptions
   ): Promise<T> {
-    if (options?.shouldMockEvents && isEventPluginInvoke(cmd)) {
+    if (mockOptions?.shouldMockEvents && isEventPluginInvoke(cmd)) {
       return handleEventPlugin(cmd, args) as T
     }
 
-    return cb(cmd, args) as T
+    const response = cb(cmd, args)
+
+    if (
+      invokeOptions?.reviver
+      && response !== undefined
+      && !(response instanceof ArrayBuffer)
+      && !ArrayBuffer.isView(response)
+    ) {
+      const json = JSON.stringify(response)
+
+      if (json !== undefined) {
+        return JSON.parse(json, invokeOptions.reviver) as T
+      }
+    }
+
+    return response as T
   }
 
   const callbacks = new Map<number, (data: unknown) => void>()
@@ -193,6 +208,15 @@ export function mockIPC(
     }
   }
 
+  function parseJson(callbackId: number, data: string): unknown {
+    void callbackId
+    return JSON.parse(data)
+  }
+
+  function runCallbackWithJson(id: number, data: string) {
+    runCallback(id, parseJson(id, data))
+  }
+
   function unregisterListener(event: EventName, id: number) {
     unregisterCallback(id)
   }
@@ -201,6 +225,8 @@ export function mockIPC(
   window.__TAURI_INTERNALS__.transformCallback = registerCallback
   window.__TAURI_INTERNALS__.unregisterCallback = unregisterCallback
   window.__TAURI_INTERNALS__.runCallback = runCallback
+  window.__TAURI_INTERNALS__.runCallbackWithJson = runCallbackWithJson
+  window.__TAURI_INTERNALS__.parseJson = parseJson
   window.__TAURI_INTERNALS__.callbacks = callbacks
   window.__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener =
     unregisterListener
@@ -326,6 +352,10 @@ export function clearMocks(): void {
   delete window.__TAURI_INTERNALS__.unregisterCallback
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
   delete window.__TAURI_INTERNALS__.runCallback
+  // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
+  delete window.__TAURI_INTERNALS__.runCallbackWithJson
+  // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
+  delete window.__TAURI_INTERNALS__.parseJson
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case
   delete window.__TAURI_INTERNALS__.callbacks
   // @ts-expect-error "The operand of a 'delete' operator must be optional." does not matter in this case

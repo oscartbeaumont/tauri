@@ -4,7 +4,12 @@
 
 /** @ignore */
 
-import type { invoke, transformCallback, convertFileSrc } from './core'
+import type {
+  invoke,
+  transformCallback,
+  convertFileSrc,
+  InvokeOptions
+} from './core'
 
 /** @ignore */
 declare global {
@@ -14,6 +19,8 @@ declare global {
       transformCallback: typeof transformCallback
       unregisterCallback: (id: number) => void
       runCallback: (id: number, data: unknown) => void
+      runCallbackWithJson: (id: number, data: string) => void
+      parseJson: (callbackId: number, data: string) => unknown
       callbacks: Map<number, (data: unknown) => void>
       convertFileSrc: typeof convertFileSrc
       ipc: (message: {
@@ -21,7 +28,9 @@ declare global {
         callback: number
         error: number
         payload: unknown
-        options?: InvokeOptions
+        options?: InvokeOptions & {
+          responseNeedsJsonParse?: boolean
+        }
       }) => void
       metadata: {
         currentWindow: WindowDef
