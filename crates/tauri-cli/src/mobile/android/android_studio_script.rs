@@ -6,14 +6,14 @@ use super::{detect_target_ok, ensure_init, env, get_app, get_config, read_option
 use crate::{
   error::{Context, ErrorExt},
   helpers::config::{get_config as get_tauri_config, reload_config as reload_tauri_config},
-  interface::{AppInterface, Interface},
+  interface::AppInterface,
   mobile::CliOptions,
   Error, Result,
 };
 use clap::{ArgAction, Parser};
 
 use cargo_mobile2::{
-  android::{adb, target::Target},
+  android::{adb, device::ConnectionStatus, target::Target},
   opts::Profile,
   target::{call_for_targets_with_fallback, TargetTrait},
 };
@@ -62,20 +62,17 @@ pub fn command(options: Options) -> Result<()> {
     )?
   };
 
-  let (config, metadata) = {
-    let (config, metadata) = get_config(
-      &get_app(
-        MobileTarget::Android,
-        &tauri_config,
-        &AppInterface::new(&tauri_config, None, dirs.tauri)?,
-        dirs.tauri,
-      ),
+  let (config, metadata) = get_config(
+    &get_app(
+      MobileTarget::Android,
       &tauri_config,
-      &[],
-      &cli_options,
-    );
-    (config, metadata)
-  };
+      &AppInterface::new(&tauri_config, None, dirs.tauri)?,
+      dirs.tauri,
+    ),
+    &tauri_config,
+    &[],
+    &cli_options,
+  );
 
   ensure_init(
     &tauri_config,
@@ -197,7 +194,11 @@ fn adb_forward_port(
   let forward = format!("tcp:{port}");
   log::info!("Forwarding port {port} with adb");
 
-  let mut devices = adb::device_list(env).unwrap_or_default();
+  let mut devices = adb::device_list(env)
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|d| d.status() == ConnectionStatus::Connected)
+    .collect::<Vec<_>>();
   // if we could not detect any running device, let's wait a few seconds, it might be booting up
   if devices.is_empty() {
     log::warn!(
@@ -209,7 +210,11 @@ fn adb_forward_port(
     loop {
       std::thread::sleep(std::time::Duration::from_secs(1));
 
-      devices = adb::device_list(env).unwrap_or_default();
+      devices = adb::device_list(env)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d.status() == ConnectionStatus::Connected)
+        .collect::<Vec<_>>();
       if !devices.is_empty() {
         break;
       }
