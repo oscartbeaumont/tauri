@@ -14,9 +14,13 @@ use std::{
 use http::HeaderMap;
 use serde::{
   de::{DeserializeOwned, IntoDeserializer},
+  ser::{
+    self, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
+    SerializeTupleStruct, SerializeTupleVariant,
+  },
   Deserialize, Serialize,
 };
-use serde_json::Value as JsonValue;
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 pub use serialize_to_javascript::Options as SerializeOptions;
 use tauri_macros::default_runtime;
 use tauri_utils::acl::resolved::ResolvedCommand;
@@ -178,9 +182,402 @@ pub trait IpcResponse {
   fn body(self) -> crate::Result<InvokeResponseBody>;
 }
 
+const JS_MAX_SAFE_INT: i128 = 9_007_199_254_740_991;
+
+struct IpcResponseSerializer;
+
+fn bigint_value(value: impl ToString) -> JsonValue {
+  let mut object = JsonMap::new();
+  object.insert("$bigint".into(), JsonValue::String(value.to_string()));
+  JsonValue::Object(object)
+}
+
+fn is_unsafe_js_integer(value: i128) -> bool {
+  !(-JS_MAX_SAFE_INT..=JS_MAX_SAFE_INT).contains(&value)
+}
+
+fn non_finite_bigint_value(kind: &str, negative: bool) -> JsonValue {
+  let mut object = JsonMap::new();
+  object.insert("$bigint".into(), JsonValue::Bool(true));
+  object.insert(kind.into(), JsonValue::Bool(true));
+  if negative {
+    object.insert("$bigint_negative".into(), JsonValue::Bool(true));
+    if kind == "$bigint_infinity" {
+      object.insert("$bigint_negative_infinity".into(), JsonValue::Bool(true));
+    }
+  }
+  JsonValue::Object(object)
+}
+
+fn finite_f64_value(value: f64) -> Result<JsonValue, serde_json::Error> {
+  JsonNumber::from_f64(value)
+    .map(JsonValue::Number)
+    .ok_or_else(|| ser::Error::custom("invalid floating point value"))
+}
+
+impl ser::Serializer for IpcResponseSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+  type SerializeSeq = JsonVecSerializer;
+  type SerializeTuple = JsonVecSerializer;
+  type SerializeTupleStruct = JsonVecSerializer;
+  type SerializeTupleVariant = JsonTupleVariantSerializer;
+  type SerializeMap = JsonMapSerializer;
+  type SerializeStruct = JsonMapSerializer;
+  type SerializeStructVariant = JsonStructVariantSerializer;
+
+  fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Bool(v))
+  }
+
+  fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
+    if is_unsafe_js_integer(i128::from(v)) {
+      Ok(bigint_value(v))
+    } else {
+      Ok(JsonValue::Number(v.into()))
+    }
+  }
+
+  fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
+    if is_unsafe_js_integer(v) {
+      Ok(bigint_value(v))
+    } else {
+      Ok(JsonValue::Number((v as i64).into()))
+    }
+  }
+
+  fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Number(v.into()))
+  }
+
+  fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
+    if i128::from(v) > JS_MAX_SAFE_INT {
+      Ok(bigint_value(v))
+    } else {
+      Ok(JsonValue::Number(v.into()))
+    }
+  }
+
+  fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
+    if v > JS_MAX_SAFE_INT as u128 {
+      Ok(bigint_value(v))
+    } else {
+      Ok(JsonValue::Number((v as u64).into()))
+    }
+  }
+
+  fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
+    self.serialize_f64(f64::from(v))
+  }
+
+  fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
+    if v.is_nan() {
+      Ok(non_finite_bigint_value("$bigint_nan", false))
+    } else if v.is_infinite() {
+      Ok(non_finite_bigint_value(
+        "$bigint_infinity",
+        v.is_sign_negative(),
+      ))
+    } else {
+      finite_f64_value(v)
+    }
+  }
+
+  fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::String(v.to_string()))
+  }
+
+  fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::String(v.to_string()))
+  }
+
+  fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Array(
+      v.iter().map(|b| JsonValue::Number((*b).into())).collect(),
+    ))
+  }
+
+  fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Null)
+  }
+
+  fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<Self::Ok, Self::Error> {
+    value.serialize(self)
+  }
+
+  fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Null)
+  }
+
+  fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Null)
+  }
+
+  fn serialize_unit_variant(
+    self,
+    _name: &'static str,
+    _variant_index: u32,
+    variant: &'static str,
+  ) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::String(variant.to_string()))
+  }
+
+  fn serialize_newtype_struct<T: ?Sized + Serialize>(
+    self,
+    _name: &'static str,
+    value: &T,
+  ) -> Result<Self::Ok, Self::Error> {
+    value.serialize(self)
+  }
+
+  fn serialize_newtype_variant<T: ?Sized + Serialize>(
+    self,
+    _name: &'static str,
+    _variant_index: u32,
+    variant: &'static str,
+    value: &T,
+  ) -> Result<Self::Ok, Self::Error> {
+    let mut object = JsonMap::new();
+    object.insert(variant.to_string(), value.serialize(IpcResponseSerializer)?);
+    Ok(JsonValue::Object(object))
+  }
+
+  fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+    Ok(JsonVecSerializer(Vec::with_capacity(len.unwrap_or(0))))
+  }
+
+  fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+    self.serialize_seq(Some(len))
+  }
+
+  fn serialize_tuple_struct(
+    self,
+    _name: &'static str,
+    len: usize,
+  ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+    self.serialize_seq(Some(len))
+  }
+
+  fn serialize_tuple_variant(
+    self,
+    _name: &'static str,
+    _variant_index: u32,
+    variant: &'static str,
+    len: usize,
+  ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+    Ok(JsonTupleVariantSerializer {
+      name: variant,
+      values: Vec::with_capacity(len),
+    })
+  }
+
+  fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+    Ok(JsonMapSerializer {
+      map: JsonMap::with_capacity(len.unwrap_or(0)),
+      next_key: None,
+    })
+  }
+
+  fn serialize_struct(
+    self,
+    _name: &'static str,
+    len: usize,
+  ) -> Result<Self::SerializeStruct, Self::Error> {
+    self.serialize_map(Some(len))
+  }
+
+  fn serialize_struct_variant(
+    self,
+    _name: &'static str,
+    _variant_index: u32,
+    variant: &'static str,
+    len: usize,
+  ) -> Result<Self::SerializeStructVariant, Self::Error> {
+    Ok(JsonStructVariantSerializer {
+      name: variant,
+      map: JsonMap::with_capacity(len),
+    })
+  }
+}
+
+struct JsonVecSerializer(Vec<JsonValue>);
+
+impl SerializeSeq for JsonVecSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+    self.0.push(value.serialize(IpcResponseSerializer)?);
+    Ok(())
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Array(self.0))
+  }
+}
+
+impl SerializeTuple for JsonVecSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+    SerializeSeq::serialize_element(self, value)
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    SerializeSeq::end(self)
+  }
+}
+
+impl SerializeTupleStruct for JsonVecSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+    SerializeSeq::serialize_element(self, value)
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    SerializeSeq::end(self)
+  }
+}
+
+struct JsonTupleVariantSerializer {
+  name: &'static str,
+  values: Vec<JsonValue>,
+}
+
+impl SerializeTupleVariant for JsonTupleVariantSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+    self.values.push(value.serialize(IpcResponseSerializer)?);
+    Ok(())
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    let mut object = JsonMap::new();
+    object.insert(self.name.to_string(), JsonValue::Array(self.values));
+    Ok(JsonValue::Object(object))
+  }
+}
+
+struct JsonMapSerializer {
+  map: JsonMap<String, JsonValue>,
+  next_key: Option<String>,
+}
+
+impl JsonMapSerializer {
+  fn serialize_key_to_string<T: ?Sized + Serialize>(key: &T) -> Result<String, serde_json::Error> {
+    match key.serialize(IpcResponseSerializer)? {
+      JsonValue::String(key) => Ok(key),
+      JsonValue::Number(key) => Ok(key.to_string()),
+      JsonValue::Bool(key) => Ok(key.to_string()),
+      JsonValue::Null => Ok("null".into()),
+      _ => Err(ser::Error::custom(
+        "map key must be a string, number, bool, or null",
+      )),
+    }
+  }
+}
+
+impl SerializeMap for JsonMapSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Self::Error> {
+    self.next_key = Some(Self::serialize_key_to_string(key)?);
+    Ok(())
+  }
+
+  fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+    let key = self
+      .next_key
+      .take()
+      .ok_or_else(|| ser::Error::custom("serialize_value called before serialize_key"))?;
+    self
+      .map
+      .insert(key, value.serialize(IpcResponseSerializer)?);
+    Ok(())
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Object(self.map))
+  }
+}
+
+impl SerializeStruct for JsonMapSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_field<T: ?Sized + Serialize>(
+    &mut self,
+    key: &'static str,
+    value: &T,
+  ) -> Result<(), Self::Error> {
+    self
+      .map
+      .insert(key.to_string(), value.serialize(IpcResponseSerializer)?);
+    Ok(())
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    Ok(JsonValue::Object(self.map))
+  }
+}
+
+struct JsonStructVariantSerializer {
+  name: &'static str,
+  map: JsonMap<String, JsonValue>,
+}
+
+impl SerializeStructVariant for JsonStructVariantSerializer {
+  type Ok = JsonValue;
+  type Error = serde_json::Error;
+
+  fn serialize_field<T: ?Sized + Serialize>(
+    &mut self,
+    key: &'static str,
+    value: &T,
+  ) -> Result<(), Self::Error> {
+    self
+      .map
+      .insert(key.to_string(), value.serialize(IpcResponseSerializer)?);
+    Ok(())
+  }
+
+  fn end(self) -> Result<Self::Ok, Self::Error> {
+    let mut object = JsonMap::new();
+    object.insert(self.name.to_string(), JsonValue::Object(self.map));
+    Ok(JsonValue::Object(object))
+  }
+}
+
 impl<T: Serialize> IpcResponse for T {
   fn body(self) -> crate::Result<InvokeResponseBody> {
-    serde_json::to_string(&self)
+    let value = self.serialize(IpcResponseSerializer)?;
+    serde_json::to_string(&value)
       .map(Into::into)
       .map_err(Into::into)
   }
@@ -603,5 +1000,50 @@ mod tests {
     let values = vec![1, 2, 3, 4, 5, 6, 1];
     let raw = InvokeResponseBody::Raw(values.clone());
     assert_eq!(raw.deserialize::<Vec<u8>>().unwrap(), values);
+  }
+
+  #[test]
+  fn ipc_response_serializes_bigints_specially() {
+    #[derive(Serialize)]
+    struct Response {
+      safe: i64,
+      unsafe_integer: i64,
+      min_i128: i128,
+      nan: f64,
+      infinity: f64,
+      negative_infinity: f64,
+    }
+
+    let response = Response {
+      safe: 9_007_199_254_740_991,
+      unsafe_integer: 9_007_199_254_740_992,
+      min_i128: i128::MIN,
+      nan: f64::NAN,
+      infinity: f64::INFINITY,
+      negative_infinity: f64::NEG_INFINITY,
+    }
+    .body()
+    .unwrap();
+
+    let InvokeResponseBody::Json(response) = response else {
+      panic!("expected json response");
+    };
+
+    assert_eq!(
+      serde_json::from_str::<JsonValue>(&response).unwrap(),
+      serde_json::json!({
+        "safe": 9_007_199_254_740_991_i64,
+        "unsafe_integer": { "$bigint": "9007199254740992" },
+        "min_i128": { "$bigint": i128::MIN.to_string() },
+        "nan": { "$bigint": true, "$bigint_nan": true },
+        "infinity": { "$bigint": true, "$bigint_infinity": true },
+        "negative_infinity": {
+          "$bigint": true,
+          "$bigint_infinity": true,
+          "$bigint_negative_infinity": true,
+          "$bigint_negative": true
+        }
+      })
+    );
   }
 }
