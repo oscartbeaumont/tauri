@@ -234,6 +234,7 @@ pub(crate) fn event_initialization_script(function_name: &str, listeners: &str) 
           const listener = listeners[id]
           if (listener) {{
             eventData.id = id
+            eventData.payload = window.__TAURI_INTERNALS__.jsone?.decode(eventData.payload) ?? eventData.payload
             window.__TAURI_INTERNALS__.runCallback(listener.handlerId, eventData)
           }}
         }}

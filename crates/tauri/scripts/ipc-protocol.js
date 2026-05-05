@@ -37,13 +37,12 @@
 
   function sendIpcMessage(message) {
     const { cmd, callback, error, payload, options } = message
-    const encodedPayload = jsone.encode(payload)
 
     if (
       !customProtocolIpcFailed
       && (canUseCustomProtocol || cmd === fetchChannelDataCommand)
     ) {
-      const { contentType, data } = processIpcMessage(encodedPayload)
+      const { contentType, data } = processIpcMessage(payload)
 
       const headers = new Headers((options && options.headers) || {})
       headers.set('Content-Type', contentType)
@@ -62,12 +61,7 @@
           // we need to split here because on Android the content-type gets duplicated
           switch ((response.headers.get('content-type') || '').split(',')[0]) {
             case 'application/json':
-              return response
-                .text()
-                .then((r) => [
-                  callbackId,
-                  JSON.parse(r, (_key, value) => decode(value))
-                ])
+              return response.json().then((r) => [callbackId, r])
             case 'text/plain':
               return response.text().then((r) => [callbackId, r])
             default:
@@ -99,7 +93,7 @@
           ...options,
           customProtocolIpcBlocked: customProtocolIpcFailed
         },
-        payload: encodedPayload,
+        payload,
         __TAURI_INVOKE_KEY__
       })
       // `window.ipc.postMessage` came from `tauri-runtime-wry` > `wry` [`with_ipc_handler`](https://github.com/tauri-apps/wry/blob/a0403b9e2f1ff9d73be7dce1184f058afcaa1d82/src/lib.rs#L1130)
@@ -107,7 +101,14 @@
     }
   }
 
+  function sendJsoneIpcMessage(message) {
+    sendIpcMessage({
+      ...message,
+      payload: jsone.encode(message.payload)
+    })
+  }
+
   Object.defineProperty(window.__TAURI_INTERNALS__, 'postMessage', {
-    value: sendIpcMessage
+    value: sendJsoneIpcMessage
   })
 })()

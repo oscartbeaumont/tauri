@@ -4108,9 +4108,9 @@ dependencies = [
 
 [[package]]
 name = "jsone"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c704c7aa960947e6f5083b73ba110b645f17c4267317edeb40e545999d53eb58"
+checksum = "d3d2ed14b0dd1ed262df76915f289f0a5800304037acbb5a7911467e9cacd8d0"
 dependencies = [
  "serde",
  "serde_json",
