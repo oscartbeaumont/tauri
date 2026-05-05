@@ -1552,6 +1552,9 @@ pub struct Builder<R: Runtime> {
 #[derive(Template)]
 #[default_template("../scripts/ipc-protocol.js")]
 pub(crate) struct InvokeInitializationScript<'a> {
+  /// The jsone runtime used to encode IPC payloads and decode responses.
+  #[raw]
+  pub(crate) jsone_runtime: String,
   /// The function that processes the IPC message.
   #[raw]
   pub(crate) process_ipc_message_fn: &'a str,
@@ -1588,6 +1591,7 @@ impl<R: Runtime> Builder<R> {
       setup: Box::new(|_| Ok(())),
       invoke_handler: Box::new(|_| false),
       invoke_initialization_script: InvokeInitializationScript {
+        jsone_runtime: jsone::JS_RUNTIME.replace("export function", "function"),
         process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
         os_name: std::env::consts::OS,
         fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,
@@ -1687,6 +1691,9 @@ impl<R: Runtime> Builder<R> {
   ///
   /// The channel automatically orders the messages, so the third closure argument represents the message number.
   /// The payload expected by the channel receiver is in the form of `{ id: usize, message: T }`.
+  ///
+  /// The interceptor receives already serialized channel bodies. If it consumes JSON responses,
+  /// it is responsible for preserving or decoding [`jsone`] remapped values before forwarding them.
   pub fn channel_interceptor<
     F: Fn(&Webview<R>, CallbackFn, usize, &InvokeResponseBody) -> bool + Send + Sync + 'static,
   >(

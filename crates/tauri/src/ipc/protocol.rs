@@ -119,7 +119,7 @@ pub fn get<R: Runtime>(manager: Arc<AppManager<R>>) -> UriSchemeProtocolHandler 
                       mime::APPLICATION_OCTET_STREAM,
                     ),
                     InvokeResponse::Err(e) => (
-                      http::Response::new(serde_json::to_vec(&e.0).unwrap().into()),
+                      http::Response::new(serde_json::to_vec(&jsone::Jsone(e.0)).unwrap().into()),
                       mime::APPLICATION_JSON,
                     ),
                   };

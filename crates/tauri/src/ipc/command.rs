@@ -36,6 +36,14 @@ pub struct CommandItem<'a, R: Runtime> {
   pub acl: &'a Option<Vec<ResolvedCommand>>,
 }
 
+impl<R: Runtime> Clone for CommandItem<'_, R> {
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<R: Runtime> Copy for CommandItem<'_, R> {}
+
 /// Trait implemented by command arguments to derive a value from a [`CommandItem`].
 ///
 /// # Command Arguments
@@ -65,7 +73,13 @@ impl<'de, D: Deserialize<'de>, R: Runtime> CommandArg<'de, R> for D {
     let arg = command.key;
     #[cfg(feature = "tracing")]
     let _span = tracing::trace_span!("ipc::request::deserialize_arg", arg = arg).entered();
-    Self::deserialize(command).map_err(|e| crate::Error::InvalidArgs(name, arg, e).into())
+    match jsone::Jsone::<Self>::deserialize(command) {
+      Ok(value) => Ok(value.0),
+      Err(e) if e.to_string().contains("missing required key") => {
+        Self::deserialize(command).map_err(|e| crate::Error::InvalidArgs(name, arg, e).into())
+      }
+      Err(e) => Err(crate::Error::InvalidArgs(name, arg, e).into()),
+    }
   }
 }
 

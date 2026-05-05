@@ -104,6 +104,11 @@ pub enum InvokeResponseBody {
 }
 
 impl From<String> for InvokeResponseBody {
+  /// Creates a JSON response from a pre-serialized JSON string.
+  ///
+  /// Tauri cannot apply [`jsone`] encoding to this value. Prefer returning serializable Rust values
+  /// from commands so Tauri can preserve values such as large integers and special floating point
+  /// values for JavaScript.
   fn from(value: String) -> Self {
     Self::Json(value)
   }
@@ -118,7 +123,7 @@ impl From<Vec<u8>> for InvokeResponseBody {
 impl From<InvokeBody> for InvokeResponseBody {
   fn from(value: InvokeBody) -> Self {
     match value {
-      InvokeBody::Json(v) => Self::Json(serde_json::to_string(&v).unwrap()),
+      InvokeBody::Json(v) => Self::Json(serde_json::to_string(&jsone::Jsone(v)).unwrap()),
       InvokeBody::Raw(v) => Self::Raw(v),
     }
   }
@@ -132,9 +137,12 @@ impl IpcResponse for InvokeResponseBody {
 
 impl InvokeResponseBody {
   /// Attempts to deserialize the response.
+  ///
+  /// JSON responses are decoded with [`jsone`] support, but raw JSON strings that were not
+  /// serialized by Tauri can only preserve values that are already encoded in jsone's remap format.
   pub fn deserialize<T: DeserializeOwned>(self) -> serde_json::Result<T> {
     match self {
-      Self::Json(v) => serde_json::from_str(&v),
+      Self::Json(v) => serde_json::from_str::<jsone::Jsone<T>>(&v).map(|value| value.0),
       Self::Raw(v) => T::deserialize(v.into_deserializer()),
     }
   }
@@ -180,7 +188,7 @@ pub trait IpcResponse {
 
 impl<T: Serialize> IpcResponse for T {
   fn body(self) -> crate::Result<InvokeResponseBody> {
-    serde_json::to_string(&self)
+    serde_json::to_string(&jsone::Jsone(self))
       .map(Into::into)
       .map_err(Into::into)
   }
@@ -199,6 +207,10 @@ impl IpcResponse for Response {
 
 impl Response {
   /// Defines a response with the given body.
+  ///
+  /// If the body is provided as pre-serialized JSON, Tauri cannot apply [`jsone`] encoding to it.
+  /// Prefer returning serializable Rust values from commands so Tauri can preserve values such as
+  /// large integers and special floating point values for JavaScript.
   pub fn new(body: impl Into<InvokeResponseBody>) -> Self {
     Self { body: body.into() }
   }
@@ -240,7 +252,7 @@ impl InvokeError {
 impl<T: Serialize> From<T> for InvokeError {
   #[inline]
   fn from(value: T) -> Self {
-    serde_json::to_value(value)
+    serde_json::to_value(jsone::Jsone(value))
       .map(Self)
       .unwrap_or_else(Self::from_error)
   }
@@ -340,6 +352,10 @@ impl<R: Runtime> InvokeResolver<R> {
   }
 
   /// Reply to the invoke promise with an async task which is already serialized.
+  ///
+  /// Tauri cannot apply [`jsone`] encoding to pre-serialized JSON returned by this API. Prefer
+  /// [`Self::respond_async`] when returning values that may include large integers or special
+  /// floating point values.
   pub fn respond_async_serialized<F>(self, task: F)
   where
     F: Future<Output = Result<InvokeResponseBody, InvokeError>> + Send + 'static,

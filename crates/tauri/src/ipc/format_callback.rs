@@ -81,7 +81,7 @@ fn serialize_js_with<F: FnOnce(&str) -> String>(
 ///
 /// See [`format_raw`] for more information.
 pub fn format<T: Serialize>(function_name: CallbackFn, arg: &T) -> crate::Result<String> {
-  format_raw(function_name, serde_json::to_string(arg)?)
+  format_raw(function_name, serde_json::to_string(&jsone::Jsone(arg))?)
 }
 
 /// Formats a function name and a raw JSON string argument to be evaluated as callback.

@@ -166,6 +166,7 @@ pub fn mock_builder() -> Builder<MockRuntime> {
   let mut builder = Builder::<MockRuntime>::new().enable_macos_default_menu(false);
 
   builder.invoke_initialization_script = crate::app::InvokeInitializationScript {
+    jsone_runtime: jsone::JS_RUNTIME.replace("export function", "function"),
     process_ipc_message_fn: crate::manager::webview::PROCESS_IPC_MESSAGE_FN,
     os_name: std::env::consts::OS,
     fetch_channel_data_command: crate::ipc::channel::FETCH_CHANNEL_DATA_COMMAND,

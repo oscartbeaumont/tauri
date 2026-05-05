@@ -16,17 +16,34 @@
   const fetchChannelDataCommand = __TEMPLATE_fetch_channel_data_command__
   let customProtocolIpcFailed = false
 
+  __RAW_jsone_runtime__
+
+  function decodeIpcValue(value) {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value
+    return decode(value)
+  }
+
+  const jsone = {
+    encode,
+    decode: decodeIpcValue
+  }
+
+  Object.defineProperty(window.__TAURI_INTERNALS__, 'jsone', {
+    value: jsone
+  })
+
   // on Android we never use it because Android does not have support to reading the request body
   const canUseCustomProtocol = osName !== 'android'
 
   function sendIpcMessage(message) {
     const { cmd, callback, error, payload, options } = message
+    const encodedPayload = jsone.encode(payload)
 
     if (
       !customProtocolIpcFailed
       && (canUseCustomProtocol || cmd === fetchChannelDataCommand)
     ) {
-      const { contentType, data } = processIpcMessage(payload)
+      const { contentType, data } = processIpcMessage(encodedPayload)
 
       const headers = new Headers((options && options.headers) || {})
       headers.set('Content-Type', contentType)
@@ -45,7 +62,12 @@
           // we need to split here because on Android the content-type gets duplicated
           switch ((response.headers.get('content-type') || '').split(',')[0]) {
             case 'application/json':
-              return response.json().then((r) => [callbackId, r])
+              return response
+                .text()
+                .then((r) => [
+                  callbackId,
+                  JSON.parse(r, (_key, value) => decode(value))
+                ])
             case 'text/plain':
               return response.text().then((r) => [callbackId, r])
             default:
@@ -77,7 +99,7 @@
           ...options,
           customProtocolIpcBlocked: customProtocolIpcFailed
         },
-        payload,
+        payload: encodedPayload,
         __TAURI_INVOKE_KEY__
       })
       // `window.ipc.postMessage` came from `tauri-runtime-wry` > `wry` [`with_ipc_handler`](https://github.com/tauri-apps/wry/blob/a0403b9e2f1ff9d73be7dce1184f058afcaa1d82/src/lib.rs#L1130)

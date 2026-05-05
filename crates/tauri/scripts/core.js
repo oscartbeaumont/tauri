@@ -39,7 +39,7 @@
   function runCallback(id, data) {
     const callback = callbacks.get(id)
     if (callback) {
-      callback(data)
+      callback(window.__TAURI_INTERNALS__.jsone?.decode(data) ?? data)
     } else {
       console.warn(
         `[TAURI] Couldn't find callback id ${id}. This might happen when the app is reloaded while Rust is running an asynchronous operation.`

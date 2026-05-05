@@ -950,6 +950,9 @@ pub trait Emitter<R: Runtime>: sealed::ManagerBase<R> {
   }
 
   /// Similar to [`Emitter::emit`] but the payload is json serialized.
+  ///
+  /// Tauri cannot apply [`jsone`] encoding to this pre-serialized payload. Prefer [`Emitter::emit`]
+  /// for values that may include large integers or special floating point values.
   fn emit_str(&self, event: &str, payload: String) -> Result<()> {
     let event = EventName::new(event)?;
     let payload = EmitPayload::<()>::Str(payload);
@@ -989,6 +992,10 @@ pub trait Emitter<R: Runtime>: sealed::ManagerBase<R> {
   }
 
   /// Similar to [`Emitter::emit_to`] but the payload is json serialized.
+  ///
+  /// Tauri cannot apply [`jsone`] encoding to this pre-serialized payload. Prefer
+  /// [`Emitter::emit_to`] for values that may include large integers or special floating point
+  /// values.
   fn emit_str_to<I>(&self, target: I, event: &str, payload: String) -> Result<()>
   where
     I: Into<EventTarget>,
@@ -1027,6 +1034,10 @@ pub trait Emitter<R: Runtime>: sealed::ManagerBase<R> {
   }
 
   /// Similar to [`Emitter::emit_filter`] but the payload is json serialized.
+  ///
+  /// Tauri cannot apply [`jsone`] encoding to this pre-serialized payload. Prefer
+  /// [`Emitter::emit_filter`] for values that may include large integers or special floating point
+  /// values.
   fn emit_str_filter<F>(&self, event: &str, payload: String, filter: F) -> Result<()>
   where
     F: Fn(&EventTarget) -> bool,
